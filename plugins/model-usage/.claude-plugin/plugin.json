@@ -1,7 +1,7 @@
 {
   "name": "model-usage",
-  "version": "0.3.0",
-  "description": "Pane with token usage per model as a GitHub-style activity graph, a pixel crab per model, cost share dials and account usage limits",
+  "version": "0.4.0",
+  "description": "Pane with token usage per model as a GitHub-style activity graph, a pixel crab per model, cost share dials against the 5-hour or weekly limit, and account usage limits",
   "author": {
     "name": "j-byte-s-industries",
     "url": "https://github.com/j-byte-s-industries"
