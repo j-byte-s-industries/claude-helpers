@@ -1,0 +1,19 @@
+{
+  "name": "claude-helpers",
+  "owner": {
+    "name": "j-byte-s-industries",
+    "url": "https://github.com/j-byte-s-industries"
+  },
+  "metadata": {
+    "description": "Claude Code skills, plugins and mods."
+  },
+  "plugins": [
+    {
+      "name": "model-usage",
+      "source": "./plugins/model-usage",
+      "description": "Mod: token usage per model as an activity graph, pixel crab per model, cost share dials and account usage limits.",
+      "version": "0.1.0",
+      "category": "mod"
+    }
+  ]
+}

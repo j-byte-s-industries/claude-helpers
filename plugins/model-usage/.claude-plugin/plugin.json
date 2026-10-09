@@ -1,0 +1,20 @@
+{
+  "name": "model-usage",
+  "version": "0.1.0",
+  "description": "Pane with token usage per model as a GitHub-style activity graph, a pixel crab per model, cost share dials and account usage limits",
+  "author": {
+    "name": "j-byte-s-industries",
+    "url": "https://github.com/j-byte-s-industries"
+  },
+  "homepage": "https://github.com/j-byte-s-industries/claude-helpers/tree/main/plugins/model-usage",
+  "repository": "https://github.com/j-byte-s-industries/claude-helpers",
+  "license": "MIT",
+  "keywords": [
+    "usage",
+    "tokens",
+    "models",
+    "mod",
+    "dashboard"
+  ],
+  "types": "./types/index.d.ts"
+}

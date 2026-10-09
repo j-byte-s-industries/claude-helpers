@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="40" viewBox="0 0 680 40"><style>
+.mt{fill:#1f1f1f}.ms{fill:#6b6b68}.mm{fill:#9a9a96}.mk{fill:#ebedf0}.mkr{stroke:#ebedf0}.mln{stroke:#e4e4e1}.tile{fill:#f4f3f0}
+@media (prefers-color-scheme: dark){.mt{fill:#ececec}.ms{fill:#a8a8a4}.mm{fill:#7d7d79}.mk{fill:#2d333b}.mkr{stroke:#2d333b}.mln{stroke:#333331}.tile{fill:#262625}}
+.mu-opus-l0{fill:#e4d9ff}.mu-opus-l1{fill:#c4aaff}.mu-opus-l2{fill:#9a74f0}.mu-opus-l3{fill:#7545d6}.mu-opus-l4{fill:#4f26a8}@media (prefers-color-scheme: dark){.mu-opus-l0{fill:#3b2a5c}.mu-opus-l1{fill:#5b3f99}.mu-opus-l2{fill:#7c5cc4}.mu-opus-l3{fill:#a78bfa}.mu-opus-l4{fill:#d2bfff}}.mu-sonnet-l0{fill:#cfe6ff}.mu-sonnet-l1{fill:#9bcbff}.mu-sonnet-l2{fill:#58a6ff}.mu-sonnet-l3{fill:#1f7ad6}.mu-sonnet-l4{fill:#0c4f94}@media (prefers-color-scheme: dark){.mu-sonnet-l0{fill:#0c3a66}.mu-sonnet-l1{fill:#115a9e}.mu-sonnet-l2{fill:#1f7ad6}.mu-sonnet-l3{fill:#58a6ff}.mu-sonnet-l4{fill:#a5d1ff}}.mu-haiku-l0{fill:#ffe9c2}.mu-haiku-l1{fill:#ffd27a}.mu-haiku-l2{fill:#e3a63b}.mu-haiku-l3{fill:#bf7f17}.mu-haiku-l4{fill:#7d4d06}@media (prefers-color-scheme: dark){.mu-haiku-l0{fill:#5a3a0a}.mu-haiku-l1{fill:#8a5a10}.mu-haiku-l2{fill:#bf7f17}.mu-haiku-l3{fill:#e3a63b}.mu-haiku-l4{fill:#ffd27a}}.mu-other-l0{fill:#c8f0d2}.mu-other-l1{fill:#8bdc9f}.mu-other-l2{fill:#39d353}.mu-other-l3{fill:#26a641}.mu-other-l4{fill:#006d32}@media (prefers-color-scheme: dark){.mu-other-l0{fill:#0e4429}.mu-other-l1{fill:#006d32}.mu-other-l2{fill:#26a641}.mu-other-l3{fill:#39d353}.mu-other-l4{fill:#7ee787}}
+.mu-run .la{animation:mst .5s steps(1) infinite}.mu-run .lb{animation:mst .5s steps(1) infinite -.25s}
+.mu-run .bd{animation:mbob .5s steps(1) infinite -.125s}
+.mu-run g{transform-box:fill-box}
+@keyframes mst{50%{transform:translateY(-1px)}}@keyframes mbob{50%{transform:translateY(1px)}}
+.mu-c-haiku.mu-run .la{animation-duration:.25s}.mu-c-haiku.mu-run .lb{animation-duration:.25s;animation-delay:-.125s}
+.mu-c-haiku.mu-run .ball{animation:mtoss 1s ease-in-out infinite}
+@keyframes mtoss{50%{transform:translateY(-6px)}}
+.mu-c-sonnet.mu-run .case{transform-origin:50% 0;animation:mswing .5s ease-in-out infinite}
+@keyframes mswing{50%{transform:rotate(14deg)}}
+.mu-c-opus.mu-run{animation:mfloat 1.2s ease-in-out infinite}
+.mu-c-opus.mu-run .la,.mu-c-opus.mu-run .lb,.mu-c-opus.mu-run .bd{animation:none}
+.mu-c-opus.mu-run .orb{animation:mblink .6s steps(1) infinite}
+@keyframes mfloat{50%{transform:translateY(-2px)}}@keyframes mblink{50%{opacity:.25}}
+.mu-live{animation:mpulse 1.6s ease-in-out infinite}@keyframes mpulse{50%{opacity:.3}}
+.mu-tw{animation:mtw 2.4s ease-in-out infinite}.mu-tw2{animation:mtw 3.1s ease-in-out infinite -1s}
+@keyframes mtw{50%{opacity:.55}}
+@media (prefers-reduced-motion: reduce){.mu-run,.mu-run g,.mu-live,.mu-tw,.mu-tw2{animation:none!important}}
+</style><rect class="tile" x="0" y="0" width="222.66666666666666" height="40" rx="8"/>
+<text class="ms" x="9" y="16" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif" font-size="11">Models</text>
+<text class="mt" x="9" y="33" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif" font-size="15" font-weight="600" font-variant-numeric="tabular-nums">3</text><rect class="tile" x="228.66666666666666" y="0" width="222.66666666666666" height="40" rx="8"/>
+<text class="ms" x="237.66666666666666" y="16" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif" font-size="11">Requests (session)</text>
+<text class="mt" x="237.66666666666666" y="33" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif" font-size="15" font-weight="600" font-variant-numeric="tabular-nums">126</text><rect class="tile" x="457.3333333333333" y="0" width="222.66666666666666" height="40" rx="8"/>
+<text class="ms" x="466.3333333333333" y="16" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif" font-size="11">Tokens today</text>
+<text class="mt" x="466.3333333333333" y="33" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif" font-size="15" font-weight="600" font-variant-numeric="tabular-nums">412k</text></svg>
