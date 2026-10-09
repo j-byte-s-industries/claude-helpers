@@ -31,7 +31,7 @@ A [Claude Code](https://claude.com/claude-code) mod that shows how much of each 
   | Family | Character |
   | --- | --- |
   | Haiku | a kid in a baseball cap, tossing a ball |
-  | Sonnet | a young professional with glasses, a tie and a briefcase |
+  | Sonnet | a young professional in a navy suit with a white shirt, red tie and a briefcase |
   | Opus | an old sage with a starry hat, a long beard and a glowing staff |
   | anything else | the plain crab |
 

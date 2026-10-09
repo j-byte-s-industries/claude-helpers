@@ -28,9 +28,8 @@ const SCALES: Record<string, string[]> = {
 
 
 // 7-cell sprites, 4 rows tall: [text, color] per row.
-const SPRITES: Record<string, { tag: string; rows: [string, string][] }> = {
+const SPRITES: Record<string, { rows: [string, string][] }> = {
   haiku: {
-    tag: 'the kid in the ball cap',
     rows: [
       ['  ▄██▄ ', '#e5534b'],
       [' ▀▀▀▀▀▬', '#e5534b'],
@@ -39,7 +38,6 @@ const SPRITES: Record<string, { tag: string; rows: [string, string][] }> = {
     ],
   },
   sonnet: {
-    tag: 'the young professional',
     rows: [
       ['  ▄▄▄  ', '#8b5e3c'],
       [' [•‿•] ', '#ffd9a8'],
@@ -48,7 +46,6 @@ const SPRITES: Record<string, { tag: string; rows: [string, string][] }> = {
     ],
   },
   opus: {
-    tag: 'the old sage',
     rows: [
       ['   ▲   ', '#a78bfa'],
       ['  ▟█▙  ', '#7c5cc4'],
@@ -57,7 +54,6 @@ const SPRITES: Record<string, { tag: string; rows: [string, string][] }> = {
     ],
   },
   other: {
-    tag: 'a mystery guest',
     rows: [
       ['  ▄▄▄  ', '#7ee787'],
       [' [o_o] ', '#7ee787'],
@@ -153,22 +149,29 @@ const COSTUMES: Record<string, (f: Fill, accent: string) => void> = {
     f(12, 15, 1, 1, '#c9582f')
     f(17, 16, 1, 1, '#c9582f')
   },
-  // Sonnet: a young professional with glasses, a tie and a briefcase.
+  // Sonnet: a young professional in a navy suit (accent lapels), white shirt, red tie, side-parted hair, briefcase.
   sonnet: (f, t) => {
     crabBody(f)
     stamp(f, 7, 7, [
+      '....hhhhhhhh....',
       '..hhhhhhhhhhhh..',
-      '.hhhhhhhhhhhhhh.',
-      'hhhpphhhhhhhhhhh',
-    ], { h: '#5b3a22', p: '#7a5130' })
-    const g = '#2b2f36'
-    f(8, 11, 4, 1, g); f(8, 14, 4, 1, g); f(8, 12, 1, 2, g); f(11, 12, 1, 2, g)
-    f(18, 11, 4, 1, g); f(18, 14, 4, 1, g); f(18, 12, 1, 2, g); f(21, 12, 1, 2, g)
-    f(12, 12, 6, 1, g)
-    f(12, 16, 6, 1, '#F8F6F1')
-    f(14, 17, 2, 1, '#E5534B'); f(14, 18, 2, 3, '#E5534B'); f(14, 21, 2, 1, '#c63c35')
-    f(7, 17, 3, 5, t); f(20, 17, 3, 5, t)
-    f(26, 18, 4, 5, '#7a4a26', 'case')
+      '.hhhppphhhhhhhh.',
+      'hhhhhhhhhhh...hh',
+      'hh............hh',
+    ], { h: '#2b1d16', p: '#9a7050' })
+    stamp(f, 7, 15, [
+      'jjjjlwwwwwwljjjj',
+      'jjjjjlwrrwljjjjj',
+      'jjjjjjlrrljjjjjj',
+      'jjjjjjlrrljjjjjj',
+      'jjjjjjlrrljjjjjj',
+      'jjjjjjjrrjjjjjjj',
+      'jjjjjjjjjjjjjjjj',
+    ], { j: '#2a3b66', l: t, w: '#F8F6F1', r: '#d8334a' })
+    f(5, 14, 2, 4, '#2a3b66'); f(23, 14, 2, 4, '#2a3b66')
+    f(5, 17, 2, 1, '#F8F6F1'); f(23, 17, 2, 1, '#F8F6F1')
+    f(19, 18, 2, 1, '#F8F6F1')
+    f(26, 18, 4, 5, '#8a5a2b', 'case')
     f(27, 17, 2, 1, '#3a2412', 'case')
     f(26, 20, 4, 1, '#d9a441', 'case')
   },
@@ -479,7 +482,7 @@ const cardSvg = (W: number, c: Card): string => {
     H,
     `${crabSvg(0, 6, fam, accent, c.isBusy)}
 <text class="mt" x="40" y="17" font-family="${FONT}" font-size="14" font-weight="600">${xml(modelName(c.model))}</text>
-<text x="40" y="31" font-family="${FONT}" font-size="11"><tspan fill="${accent}">${xml(SPRITES[fam].tag)}</tspan><tspan class="ms">  ·  ${xml(c.model)}</tspan></text>
+<text class="ms" x="40" y="31" font-family="${FONT}" font-size="11">${xml(c.model)}</text>
 <text class="mt" x="40" y="46" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">today ${fmt(c.days[todayKey] ?? 0)}   7d ${fmt(sumDays(c.days, c.today, 7))}   ${g.window} ${fmt(sum)}   peak ${g.unit} ${fmt(max)}</text>
 ${busy}${dial}${colLabels.join('')}${rowLabels.join('')}${cells.join('')}${legend}
 <text class="ms" x="${L}" y="${legendY + 30}" font-family="${FONT}" font-size="10" font-variant-numeric="tabular-nums">${xml(session)}</text>
@@ -538,7 +541,7 @@ ${rowsSvg}`,
 
 let chain: Promise<unknown> = Promise.resolve()
 
-const BUILD = '2026-10-09-a'
+const BUILD = '2026-10-09-c'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const draw = async ($: EngineInterface, e: any) => {
@@ -663,7 +666,6 @@ const draw = async ($: EngineInterface, e: any) => {
                 </Box>
                 <Box flexDirection="column" justifyContent="center">
                   <Text bold color={scale[3]}>{modelName(model)}{isBusy(model) ? ' ●' : ''}</Text>
-                  <Text dimColor italic>{SPRITES[family(model)].tag}</Text>
                   <Text color={scale[3]}>
                     {['○', '◔', '◑', '◕', '●'][Math.min(4, Math.round(shareOf(model) * 4))]} {Math.round(shareOf(model) * 100)}%
                     <Text dimColor> of session cost · {fmtUsd(costs[model])}</Text>
