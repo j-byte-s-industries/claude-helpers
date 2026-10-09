@@ -15,6 +15,7 @@ The stack in one sentence: **spend fewer tokens** (RTK, codebase-memory, caveman
 | [`hooks/`](hooks) | Hook scripts: `big-read-guard.sh`, `lint-after-edit.sh`, and three `cbm-*` graph-context hooks. |
 | [`config/`](config) | `CLAUDE.example.md` (global instructions), `RTK.md`, `settings.example.json` (hooks, plugins, env). |
 | [`plugins/model-usage`](plugins/model-usage) | A mod: `/model-usage` shows token usage per model as an activity graph, with cost share dials and account usage limits. |
+| [`patches/`](patches) | Optional patches for third-party mods we use (see below). |
 | [`docs/`](docs) | Guides: [RTK](docs/rtk.md), [codebase-memory](docs/codebase-memory.md), [caveman](docs/caveman.md), [tiered delegation](docs/delegation.md). |
 | [`install.sh`](install.sh) | Copies the skills, agents and hooks into `~/.claude` without overwriting anything. |
 
@@ -116,6 +117,17 @@ Start a new Claude Code session.
 | `big-read-guard.sh` | PreToolUse, `Read` | Denies a whole-file read (no `offset`/`limit`) of a file over 40,000 bytes. Images, PDFs and notebooks are exempt. |
 | `lint-after-edit.sh` | PostToolUse, `Edit` and `Write` | Runs `ruff check --fix` on `.py` files and `yamllint -d relaxed` on `.yml`/`.yaml` files if the tool is installed. Output goes to stderr; it never blocks. |
 | `cbm-session-reminder`, `cbm-subagent-reminder`, `cbm-code-discovery-gate` | SessionStart, SubagentStart, Grep/Glob/Read | Add code-graph context via `codebase-memory-mcp hook-augment`. They fail open. |
+
+## Dock and undock for the progress mods
+
+`model-usage` has a Dock/Undock button pair built in (see its README). [savvy-progress](https://github.com/JohnnyVizz/claude-kit) is a third-party mod, so we keep its change as a patch instead of copying it: it adds an **Undock** button to its agents panel and turns the button on its progress bar into **Dock ×N** / **Undock ×N**.
+
+```bash
+cd ~/claude-kit        # your clone of JohnnyVizz/claude-kit
+git apply ~/claude-helpers/patches/savvy-progress-dock-undock.patch
+```
+
+Start a new session afterwards. The patch applied cleanly to the claude-kit version we use; if `git apply` complains after an upstream update, skip it, the mod works without it. `git apply -R` undoes it.
 
 ## Adapting it for your team
 

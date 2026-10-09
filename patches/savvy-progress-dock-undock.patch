@@ -1,0 +1,88 @@
+diff --git a/plugins/savvy-progress/hooks/register.tsx b/plugins/savvy-progress/hooks/register.tsx
+index 735c64e..27504d4 100644
+--- a/plugins/savvy-progress/hooks/register.tsx
++++ b/plugins/savvy-progress/hooks/register.tsx
+@@ -11,6 +11,7 @@ const panel = atom({ plugin: 'savvy-progress', key: 'panel' } as const, {
+   autoOpenedFor: '',
+ })
+ const now = atom({ plugin: 'savvy-progress', key: 'now' } as const, 0)
++const isPaneOpen = atom({ plugin: 'savvy-progress', key: 'isPaneOpen' } as const, false)
+ 
+ const TOOL = 'mcp__savvy-progress__progress'
+ const STEP_TOOL = 'mcp__savvy-progress__step'
+@@ -859,6 +860,20 @@ export const register: Register = (on, options) => {
+     return next(e)
+   })
+ 
++  on('ui.open', async ($, e, next) => {
++    const opened = await next(e)
++    if (e.id === PANE) await update($, isPaneOpen, () => true).catch(() => undefined)
++
++    return opened
++  })
++
++  on('ui.close', async ($, e, next) => {
++    const closed = await next(e)
++    if (e.id === PANE) await update($, isPaneOpen, () => false).catch(() => undefined)
++
++    return closed
++  })
++
+   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+     const s = tr()
+     const ui = $.ui.resolve(e)
+@@ -883,6 +898,7 @@ export const register: Register = (on, options) => {
+         onPress={() => update($, panel, prev => ({ ...prev, isCompact: !prev.isCompact }))}
+       />
+     )
++    const undock = <Button key="undock" label="Undock" plain onPress={() => void $.ui.close({ id: PANE })} />
+     const toggleDone = (
+       <Button
+         key="done"
+@@ -908,6 +924,7 @@ export const register: Register = (on, options) => {
+           <Box flexDirection="column" gap={1}>
+             <Svg source={compactSvg(W, list, planned, t)} alt={`${list.length} ${s.agentsCount}, ${summary}`} width={W} height={32} />
+             {toggleCompact}
++          {undock}
+           </Box>
+         )
+       }
+@@ -915,6 +932,7 @@ export const register: Register = (on, options) => {
+         <Box flexDirection="column">
+           <Svg source={headerSvg(W, title, t)} alt={title ? `${title}: ${summary}` : summary} width={W} height={headerHeight(title)} />
+           {toggleCompact}
++          {undock}
+           {isEmpty && <Text dimColor>{s.empty}</Text>}
+           {running.length > 0 && section('h-run', `${s.running} · ${running.length}`)}
+           {running.map(a => (
+@@ -976,6 +994,7 @@ export const register: Register = (on, options) => {
+             {title}
+           </Text>
+           {toggleCompact}
++          {undock}
+         </Box>
+         <Text dimColor>
+           ≈{fmtCost(t.cost)} · {fmtTokens(t.tokens)} {s.tokensWord} · {fmtTime(t.time)}
+@@ -1031,8 +1050,9 @@ export const register: Register = (on, options) => {
+     const list = await read($, agents)
+     const crew = list.length + plannedOf(f, list).length
+     const isWorking = list.some(a => a.status === 'running')
++    const isDocked = await read($, isPaneOpen)
+     const crewButton = (
+-      <Button key="savvy-agents" label={`×${crew}`} plain onPress={() => void togglePane($)} />
++      <Button key="savvy-agents" label={`${isDocked ? 'Undock' : 'Dock'} ×${crew}`} plain onPress={() => void togglePane($)} />
+     )
+     const percent = `${Math.round(ratio(f) * 100)}%`
+     const dismiss = (
+diff --git a/plugins/savvy-progress/types/index.d.ts b/plugins/savvy-progress/types/index.d.ts
+index 28387cd..7f9fb69 100644
+--- a/plugins/savvy-progress/types/index.d.ts
++++ b/plugins/savvy-progress/types/index.d.ts
+@@ -53,6 +53,7 @@ declare module 'claude-code' {
+       agents: AgentRun[]
+       panel: Panel
+       now: number
++      isPaneOpen: boolean
+     }
+   }
+ }

@@ -44,7 +44,18 @@ A [Claude Code](https://claude.com/claude-code) mod that shows how much of each 
 
 **Terminal.** On a surface without SVG support (the terminal UI) the same content is drawn as text: colored `■` squares for the graph, block characters for the bars, and a small text sprite for each model.
 
+**Undocked summary.** See [Dock and undock](#dock-and-undock).
+
 **Status line.** A short entry such as `3 models · 412k tok` stays in the status line.
+
+## Dock and undock
+
+The pane can be docked or undocked, and each state has a button:
+
+- **Docked:** the pane is open (beside the transcript or above the prompt, wherever Claude Code seats it). Its timeframe row ends with an **Undock** button, which closes the pane.
+- **Undocked:** a one-line summary sits above the prompt: a stacked bar of each model's share of the session cost, the shares as text, tokens today, and the 5-hour limit if your account reports one. **Dock** reopens the pane. The **✕** hides the summary until you run `/model-usage` again.
+
+The summary appears as soon as there is usage to show, so a new session starts undocked. Other mods that draw above the prompt keep their own row: the summary is added beneath it, not in its place. Claude Code decides where a pane is seated (beside the transcript or inline); a mod cannot move it, which is why undocking collapses to the summary instead of a floating window.
 
 ## Install
 

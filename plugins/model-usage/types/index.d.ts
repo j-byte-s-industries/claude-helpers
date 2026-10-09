@@ -17,6 +17,6 @@ export type Daily = Record<string, Record<string, number>>
 
 declare module 'claude-code' {
   interface PluginState {
-    'model-usage': { rows: Record<string, Tally>; daily: Daily; hourly: Hourly; active: Record<string, number>; range: Range; tick: number }
+    'model-usage': { rows: Record<string, Tally>; daily: Daily; hourly: Hourly; active: Record<string, number>; range: Range; tick: number; isPaneOpen: boolean; isBandHidden: boolean }
   }
 }

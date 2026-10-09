@@ -8,6 +8,8 @@ const rows = atom({ plugin: 'model-usage', key: 'rows' } as const, {} as Record<
 const daily = atom({ plugin: 'model-usage', key: 'daily' } as const, {} as Daily)
 const hourly = atom({ plugin: 'model-usage', key: 'hourly' } as const, {} as Hourly)
 const range = atom({ plugin: 'model-usage', key: 'range' } as const, '6m' as Range)
+const isPaneOpen = atom({ plugin: 'model-usage', key: 'isPaneOpen' } as const, false)
+const isBandHidden = atom({ plugin: 'model-usage', key: 'isBandHidden' } as const, false)
 const tick = atom({ plugin: 'model-usage', key: 'tick' } as const, 0)
 const active = atom({ plugin: 'model-usage', key: 'active' } as const, {} as Record<string, number>)
 
@@ -536,7 +538,7 @@ ${rowsSvg}`,
 
 let chain: Promise<unknown> = Promise.resolve()
 
-const BUILD = '2026-10-08-d'
+const BUILD = '2026-10-09-a'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const draw = async ($: EngineInterface, e: any) => {
@@ -586,6 +588,7 @@ const draw = async ($: EngineInterface, e: any) => {
             onPress={() => update($, range, () => r.id)}
           />
         ))}
+        <Button key="undock" label="Undock" plain onPress={() => void $.ui.close({ id: PANE })} />
       </Box>
     )
 
@@ -726,6 +729,8 @@ export const register: Register = on => {
       description: 'Show token usage per model as an activity graph',
     })
     $.clock.every(30_000, () => void update($, tick, n => n + 1))
+    const open = (await $.ui.panes()).some(p => p.id === PANE)
+    await update($, isPaneOpen, () => open)
     const saved = (await $.store.get('daily')) as Daily | undefined
     if (saved) await update($, daily, () => saved)
     const savedHours = (await $.store.get('hourly')) as Hourly | undefined
@@ -734,7 +739,22 @@ export const register: Register = on => {
     return next(e)
   })
 
+  on('ui.open', async ($, e, next) => {
+    const opened = await next(e)
+    if (e.id === PANE) await update($, isPaneOpen, () => true).catch(() => undefined)
+
+    return opened
+  })
+
+  on('ui.close', async ($, e, next) => {
+    const closed = await next(e)
+    if (e.id === PANE) await update($, isPaneOpen, () => false).catch(() => undefined)
+
+    return closed
+  })
+
   on('command.run', { command: 'model-usage' }, async $ => {
+    await update($, isBandHidden, () => false)
     await $.ui.open({ id: PANE, title: 'Usage by model' })
 
     return { text: 'Usage pane opened.' }
@@ -814,5 +834,57 @@ export const register: Register = on => {
         </Box>
       )
     }
+  })
+
+  // Undocked: a one-line summary above the prompt, with a button to dock the pane again.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    if ((await read($, isPaneOpen)) || (await read($, isBandHidden))) return next(e)
+
+    const session = await read($, rows)
+    const history = await read($, daily)
+    await read($, tick)
+    const models = Array.from(new Set([...Object.keys(session), ...Object.keys(history)]))
+    if (models.length === 0) return next(e)
+
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const costs = Object.fromEntries(models.map(m => [m, costOf(m, session[m])]))
+    const costSum = Object.values(costs).reduce((n, v) => n + v, 0)
+    const share = (m: string) => (costSum > 0 ? costs[m] / costSum : 0)
+    const ranked = models.filter(m => share(m) > 0).sort((a, b) => share(b) - share(a))
+    const todayKey = key(new Date())
+    const todayTotal = models.reduce((n, m) => n + (history[m]?.[todayKey] ?? 0), 0)
+
+    let limit = ''
+    try {
+      const five = (await $.session.usage()).rateLimits.find(l => l.kind === 'five_hour')
+      if (five) limit = ` · 5h ${five.percentUsed}%`
+    } catch {
+      // No reading: leave the limit out.
+    }
+
+    const width = 16
+    const bar = ranked.map(m => {
+      const n = Math.max(1, Math.round(share(m) * width))
+
+      return <Text color={SCALES[family(m)][3]}>{'█'.repeat(n)}</Text>
+    })
+    const inner = await next(e)
+
+    return (
+      <Box flexDirection="column">
+        {inner}
+        <Box flexDirection="row" gap={1}>
+          <Text bold>usage</Text>
+          {ranked.length > 0 ? <Text>{bar}</Text> : <Text dimColor>no session cost yet</Text>}
+          <Text dimColor wrap="truncate-end">
+            {ranked.map(m => `${modelName(m).split(' ')[0].toLowerCase()} ${Math.round(share(m) * 100)}%`).join(' ')} · today {fmt(todayTotal)}
+            {limit}
+          </Text>
+          <Button key="dock" label="Dock" plain onPress={() => void $.ui.open({ id: PANE, title: 'Usage by model' })} />
+          <Button key="band-hide" label="✕" plain role="dismiss" onPress={() => update($, isBandHidden, () => true)} />
+        </Box>
+      </Box>
+    )
   })
 }
