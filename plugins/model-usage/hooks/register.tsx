@@ -416,6 +416,9 @@ type Card = {
   /** this model's cost, and its share (0..1) of the session's estimated cost */
   cost: number
   share: number
+  /** what the tally covers, and how many sessions contributed */
+  scope: string
+  sessions: number
   grid: Grid
   size: number
   today: Date
@@ -460,8 +463,8 @@ const cardSvg = (W: number, c: Card): string => {
 
   const t = c.tally
   const session = t
-    ? `session · ${t.requests} req (${t.subagentRequests} sub) · in ${fmt(t.input)} · out ${fmt(t.output)}`
-    : 'no requests this session'
+    ? `${c.scope} · ${c.sessions} session${c.sessions === 1 ? '' : 's'} · ${t.requests} req (${t.subagentRequests} sub) · in ${fmt(t.input)} · out ${fmt(t.output)}`
+    : `no requests in the ${c.scope}`
   const cache = t ? `cache · read ${fmt(t.cacheRead)} · write ${fmt(t.cacheWrite)}` : ''
   const busy = c.isBusy
     ? `<circle class="mu-live" cx="${W - 128}" cy="14" r="3.5" fill="${accent}"/><text class="ms" x="${W - 120}" y="18" font-family="${FONT}" font-size="11">responding</text>`
@@ -470,11 +473,11 @@ const cardSvg = (W: number, c: Card): string => {
   const CIRC = 2 * Math.PI * R
   const pct = Math.round(c.share * 100)
   const dial = `<g transform="translate(${W - 32},30)">
-<title>${xml(modelName(c.model))}: ${fmtUsd(c.cost)} estimated, ${pct}% of this session's cost</title>
+<title>${xml(modelName(c.model))}: ${fmtUsd(c.cost)} estimated, ${pct}% of the window's cost</title>
 <circle class="mkr" r="${R}" fill="none" stroke-width="5"/>
 <circle r="${R}" fill="none" stroke="${accent}" stroke-width="5" stroke-linecap="round" stroke-dasharray="${(c.share * CIRC).toFixed(2)} ${CIRC.toFixed(2)}" transform="rotate(-90)"/>
 <text class="mt" y="4" text-anchor="middle" font-family="${FONT}" font-size="11" font-weight="600" font-variant-numeric="tabular-nums">${pct}%</text>
-<text class="ms" x="28" y="30" text-anchor="end" font-family="${FONT}" font-size="9" font-variant-numeric="tabular-nums">${fmtUsd(c.cost)} of session</text>
+<text class="ms" x="28" y="30" text-anchor="end" font-family="${FONT}" font-size="9" font-variant-numeric="tabular-nums">${fmtUsd(c.cost)} of window</text>
 </g>`
 
   return svgDoc(
@@ -539,15 +542,131 @@ ${rowsSvg}`,
   )
 }
 
+// ---------------------------------------------------------------------------
+// All sessions in the current usage limit: each session writes its own small file
+// (5-minute buckets), and every session reads them all. One writer per file, so
+// concurrent sessions never overwrite each other.
+
+const FIVE_HOURS = 5 * 3_600_000
+const BUCKET = 300_000
+const KEEP_BUCKETS_MS = 24 * 3_600_000
+
+// requests, input, output, cache read, cache write, subagent requests
+type Cell = [number, number, number, number, number, number]
+type Buckets = Record<string, Record<string, Cell>>
+type SessionFile = { sessionId: string; updatedAt: number; buckets: Buckets }
+
+const place = { dir: '', id: '' }
+let mine: Buckets = {}
+
+const emptyTally = (): Tally => ({ requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subagentRequests: 0 })
+
+const addCell = (t: Tally, c: Cell): void => {
+  t.requests += c[0]
+  t.input += c[1]
+  t.output += c[2]
+  t.cacheRead += c[3]
+  t.cacheWrite += c[4]
+  t.subagentRequests += c[5]
+}
+
+const recordBucket = (model: string, u: Usage, isSub: boolean, at: number): void => {
+  const b = String(Math.floor(at / BUCKET) * BUCKET)
+  const m = (mine[model] ??= {})
+  const c = (m[b] ??= [0, 0, 0, 0, 0, 0])
+  c[0] += 1
+  c[1] += u.input_tokens
+  c[2] += u.output_tokens
+  c[3] += u.cache_read_input_tokens
+  c[4] += u.cache_creation_input_tokens
+  c[5] += isSub ? 1 : 0
+  for (const model2 of Object.keys(mine))
+    for (const k of Object.keys(mine[model2])) if (at - Number(k) > KEEP_BUCKETS_MS) delete mine[model2][k]
+}
+
+type Usage = {
+  input_tokens: number
+  output_tokens: number
+  cache_read_input_tokens: number
+  cache_creation_input_tokens: number
+}
+
+// Folds session files into one tally per model for buckets starting at or after `startMs`.
+const foldFiles = (files: SessionFile[], startMs: number): { perModel: Record<string, Tally>; sessions: number } => {
+  const perModel: Record<string, Tally> = {}
+  let sessions = 0
+  const from = Math.floor(startMs / BUCKET) * BUCKET
+  for (const f of files) {
+    let isActive = false
+    for (const [model, byBucket] of Object.entries(f.buckets ?? {}))
+      for (const [b, cell] of Object.entries(byBucket)) {
+        if (Number(b) < from) continue
+        addCell((perModel[model] ??= emptyTally()), cell)
+        isActive = true
+      }
+    if (isActive) sessions += 1
+  }
+  return { perModel, sessions }
+}
+
+export type WindowUsage = {
+  perModel: Record<string, Tally>
+  sessions: number
+  /** what the numbers cover: the limit's own window, or a rolling five hours */
+  label: string
+}
+
+let cached: { at: number; value: WindowUsage } | null = null
+
+const loadWindow = async ($: EngineInterface, limits: Limit[], nowMs: number): Promise<WindowUsage> => {
+  if (cached && nowMs - cached.at < 4000) return cached.value
+  const five = limits.find(l => l.kind === 'five_hour')
+  const reset = five?.resetsAt ? Date.parse(five.resetsAt) : Number.NaN
+  const isLimitWindow = !Number.isNaN(reset) && reset > nowMs && reset - nowMs <= FIVE_HOURS + 60_000
+  const startMs = isLimitWindow ? reset - FIVE_HOURS : nowMs - FIVE_HOURS
+  const label = isLimitWindow ? '5h limit window' : 'last 5h'
+
+  const files: SessionFile[] = [{ sessionId: place.id, updatedAt: nowMs, buckets: mine }]
+  if (place.dir) {
+    try {
+      for (const f of await $.fs.list(place.dir)) {
+        if (!f.name.startsWith('usage-') || !f.name.endsWith('.json') || f.name === `usage-${place.id}.json`) continue
+        if (f.mtimeMs < startMs - BUCKET) continue
+        try {
+          files.push(JSON.parse(await $.fs.read(`${place.dir}/${f.name}`)) as SessionFile)
+        } catch {
+          // A file being rewritten or damaged: skip it this time.
+        }
+      }
+    } catch {
+      // No shared folder yet or no file access: this session's numbers only.
+    }
+  }
+  const { perModel, sessions } = foldFiles(files, startMs)
+  const value = { perModel, sessions, label }
+  cached = { at: nowMs, value }
+
+  return value
+}
+
+const writeMine = async ($: EngineInterface, at: number): Promise<void> => {
+  if (!place.dir || !place.id) return
+  try {
+    const file: SessionFile = { sessionId: place.id, updatedAt: at, buckets: mine }
+    await $.fs.write(`${place.dir}/usage-${place.id}.json`, JSON.stringify(file))
+  } catch {
+    // Sharing is best effort; this session still shows its own numbers.
+  }
+}
+
 let chain: Promise<unknown> = Promise.resolve()
 
-const BUILD = '2026-10-09-c'
+const BUILD = '2026-10-09-d'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const draw = async ($: EngineInterface, e: any) => {
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
-    const session = await read($, rows)
     const history = await read($, daily)
     const hours = await read($, hourly)
     const busy = await read($, active)
@@ -563,6 +682,8 @@ const draw = async ($: EngineInterface, e: any) => {
       // No usage reading: the section says so.
     }
     const nowMs = Date.now()
+    const win = await loadWindow($, limits, nowMs)
+    const session = win.perModel
     const models = Array.from(new Set([...Object.keys(session), ...Object.keys(history)]))
     const weight = (m: string) => Object.values(history[m] ?? {}).reduce((n, v) => n + v, 0)
     models.sort((a, b) => weight(b) - weight(a))
@@ -603,8 +724,8 @@ const draw = async ($: EngineInterface, e: any) => {
       return (
         <Box flexDirection="column">
           <Svg
-            source={tilesSvg(W, [['Models', String(models.length)], ['Requests (session)', String(reqs)], ['Tokens today', fmt(todayTotal)]])}
-            alt={`${models.length} models, ${reqs} requests this session, ${fmt(todayTotal)} tokens today`}
+            source={tilesSvg(W, [['Models', String(models.length)], [`Requests (${win.label})`, String(reqs)], ['Tokens today', fmt(todayTotal)]])}
+            alt={`${models.length} models, ${reqs} requests in the ${win.label}, ${fmt(todayTotal)} tokens today`}
             width={W}
             height={40}
           />
@@ -616,7 +737,7 @@ const draw = async ($: EngineInterface, e: any) => {
             return (
               <Svg
                 key={m}
-                source={cardSvg(W, { model: m, days: history[m] ?? {}, tally: session[m], isBusy: isBusy(m), cost: costs[m], share: shareOf(m), grid, size, today })}
+                source={cardSvg(W, { model: m, days: history[m] ?? {}, tally: session[m], isBusy: isBusy(m), cost: costs[m], share: shareOf(m), scope: win.label, sessions: win.sessions, grid, size, today })}
                 alt={`${modelName(m)}: ${fmt(gridStats(grid).sum)} tokens in ${grid.window}`}
                 width={W}
                 height={cardHeight(grid, size)}
@@ -640,7 +761,7 @@ const draw = async ($: EngineInterface, e: any) => {
     return (
       <Box flexDirection="column">
         <Text dimColor>
-          {models.length} models · {reqs} requests this session · {fmt(todayTotal)} tokens today
+          {models.length} models · {reqs} requests in the {win.label} ({win.sessions} session{win.sessions === 1 ? '' : 's'}) · {fmt(todayTotal)} tokens today
         </Text>
         {picker}
         {models.map(model => {
@@ -668,14 +789,14 @@ const draw = async ($: EngineInterface, e: any) => {
                   <Text bold color={scale[3]}>{modelName(model)}{isBusy(model) ? ' ●' : ''}</Text>
                   <Text color={scale[3]}>
                     {['○', '◔', '◑', '◕', '●'][Math.min(4, Math.round(shareOf(model) * 4))]} {Math.round(shareOf(model) * 100)}%
-                    <Text dimColor> of session cost · {fmtUsd(costs[model])}</Text>
+                    <Text dimColor> of {win.label} cost · {fmtUsd(costs[model])}</Text>
                   </Text>
                   <Text dimColor>
                     today {fmt(days[key(today)] ?? 0)} · 7d {fmt(sumDays(days, today, 7))} · {grid.window} {fmt(sum)} · peak {grid.unit} {fmt(max)}
                   </Text>
                   {s && (
                     <Text dimColor>
-                      session: {s.requests} req ({s.subagentRequests} sub) · in {fmt(s.input)} · out {fmt(s.output)}
+                      {win.label}: {s.requests} req ({s.subagentRequests} sub) · in {fmt(s.input)} · out {fmt(s.output)}
                     </Text>
                   )}
                   {s && <Text dimColor>cache: read {fmt(s.cacheRead)} · write {fmt(s.cacheWrite)}</Text>}
@@ -731,6 +852,17 @@ export const register: Register = on => {
       description: 'Show token usage per model as an activity graph',
     })
     $.clock.every(30_000, () => void update($, tick, n => n + 1))
+    try {
+      place.id = await $.session.id()
+      place.dir = `${(await $.env.get('HOME')) ?? ''}/.claude/model-usage`
+      await $.fs.write(`${place.dir}/.keep`, '')
+      // Session files nobody has touched for two days are of no use to any window.
+      await $.process.run(['find', place.dir, '-name', 'usage-*.json', '-mtime', '+2', '-delete'], { timeoutMs: 5000 })
+      const own = JSON.parse(await $.fs.read(`${place.dir}/usage-${place.id}.json`)) as SessionFile
+      mine = own.buckets ?? {}
+    } catch {
+      // First run, or no file access: this session starts with an empty file.
+    }
     const open = (await $.ui.panes()).some(p => p.id === PANE)
     await update($, isPaneOpen, () => open)
     const saved = (await $.store.get('daily')) as Daily | undefined
@@ -791,6 +923,11 @@ export const register: Register = on => {
         }
       })
 
+      const nowAt = Date.now()
+      recordBucket(model, u, Boolean(e.agentId), nowAt)
+      cached = null
+      await writeMine($, nowAt)
+
       const at = new Date()
       const today = key(at)
       const hour = hourKey(at)
@@ -843,9 +980,15 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
     if ((await read($, isPaneOpen)) || (await read($, isBandHidden))) return next(e)
 
-    const session = await read($, rows)
     const history = await read($, daily)
     await read($, tick)
+    let limits: Limit[] = []
+    try {
+      limits = [...(await $.session.usage()).rateLimits]
+    } catch {
+      // No reading: the window falls back to the last five hours.
+    }
+    const session = (await loadWindow($, limits, Date.now())).perModel
     const models = Array.from(new Set([...Object.keys(session), ...Object.keys(history)]))
     if (models.length === 0) return next(e)
 
@@ -857,13 +1000,8 @@ export const register: Register = on => {
     const todayKey = key(new Date())
     const todayTotal = models.reduce((n, m) => n + (history[m]?.[todayKey] ?? 0), 0)
 
-    let limit = ''
-    try {
-      const five = (await $.session.usage()).rateLimits.find(l => l.kind === 'five_hour')
-      if (five) limit = ` · 5h ${five.percentUsed}%`
-    } catch {
-      // No reading: leave the limit out.
-    }
+    const five = limits.find(l => l.kind === 'five_hour')
+    const limit = five ? ` · 5h ${five.percentUsed}%` : ''
 
     const width = 16
     const bar = ranked.map(m => {
@@ -878,7 +1016,7 @@ export const register: Register = on => {
         {inner}
         <Box flexDirection="row" gap={1}>
           <Text bold>usage</Text>
-          {ranked.length > 0 ? <Text>{bar}</Text> : <Text dimColor>no session cost yet</Text>}
+          {ranked.length > 0 ? <Text>{bar}</Text> : <Text dimColor>no cost in the window yet</Text>}
           <Text dimColor wrap="truncate-end">
             {ranked.map(m => `${modelName(m).split(' ')[0].toLowerCase()} ${Math.round(share(m) * 100)}%`).join(' ')} · today {fmt(todayTotal)}
             {limit}

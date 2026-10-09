@@ -35,10 +35,10 @@ A [Claude Code](https://claude.com/claude-code) mod that shows how much of each 
   | Opus | an old sage with a starry hat, a long beard and a glowing staff |
   | anything else | the plain crab |
 
-- **Cost share dial.** A ring with the percentage of this session's estimated cost that came from this model, and the dollar amount under it. For example, if Opus cost $6.40 of a $11.00 session, its dial reads 58%.
-- **Numbers.** Today, the last 7 days, the window total and the peak hour or day. Under the graph: this session's requests (and how many came from subagents), input and output tokens, and cache reads and writes.
+- **Cost share dial.** A ring with the percentage of the current limit window's estimated cost that came from this model, and the dollar amount under it. For example, if Opus cost $6.40 of an $11.00 window, its dial reads 58%.
+- **Numbers.** Today, the last 7 days, the window total and the peak hour or day. Under the graph: the limit window's requests, and how many sessions contributed to them, (and how many came from subagents), input and output tokens, and cache reads and writes.
 
-**Summary tiles.** Models seen, requests this session, tokens today.
+**Summary tiles.** Models seen, requests in the limit window, tokens today.
 
 **Usage limits.** Under all the models, one bar per rate-limit window your account reports (5-hour, weekly, or a gateway spend limit): percent used, time until reset, colored green, amber from 70% and red from 90%. The session cost as Claude Code totals it is shown in the header. This section refreshes after every request and every 30 seconds.
 
@@ -48,12 +48,25 @@ A [Claude Code](https://claude.com/claude-code) mod that shows how much of each 
 
 **Status line.** A short entry such as `3 models · 412k tok` stays in the status line.
 
+## All sessions in the current limit
+
+The per-model numbers (requests, input and output, cache, and the cost share dial) are not just this session's. They add up every Claude Code session on the machine that runs the mod, inside the **current usage limit window**:
+
+- The window is the 5-hour limit's own window: from five hours before its reset time (read from `$.session.usage()`) up to now. Without a reading (no subscription, or before the first response), it is the last five hours, and the card says `last 5h` instead of `5h limit window`.
+- Every session writes a small file, `~/.claude/model-usage/usage-<session id>.json`, with its usage in 5-minute buckets for the last 24 hours. Each session reads all the files that were touched inside the window and adds them up. One writer per file means concurrent sessions never overwrite each other. Files untouched for two days are deleted when a session starts.
+- Each card says how many sessions contributed, for example `5h limit window · 3 sessions · 42 req`.
+- The window is cut at 5-minute buckets, so its edges are accurate to about 5 minutes.
+
+What it cannot see: sessions on other machines, other apps (claude.ai, the API) and sessions that do not load this mod. The **Usage limits** bars at the bottom come from your account, so they include all of that, and can read higher than the sum of the cards. If the mod cannot write to `~/.claude/model-usage` it falls back to this session's numbers and still says `5h limit window`.
+
+The activity graph is separate: its daily and hourly history lives in the plugin's own store, a single file shared by all sessions. Two sessions answering at the same instant can occasionally lose one update there, so the graph can be a little low on a busy day.
+
 ## Dock and undock
 
 The pane can be docked or undocked, and each state has a button:
 
 - **Docked:** the pane is open (beside the transcript or above the prompt, wherever Claude Code seats it). Its timeframe row ends with an **Undock** button, which closes the pane.
-- **Undocked:** a one-line summary sits above the prompt: a stacked bar of each model's share of the session cost, the shares as text, tokens today, and the 5-hour limit if your account reports one. **Dock** reopens the pane. The **✕** hides the summary until you run `/model-usage` again.
+- **Undocked:** a one-line summary sits above the prompt: a stacked bar of each model's share of the limit window's cost, the shares as text, tokens today, and the 5-hour limit if your account reports one. **Dock** reopens the pane. The **✕** hides the summary until you run `/model-usage` again.
 
 The summary appears as soon as there is usage to show, so a new session starts undocked. Other mods that draw above the prompt keep their own row: the summary is added beneath it, not in its place. Claude Code decides where a pane is seated (beside the transcript or inline); a mod cannot move it, which is why undocking collapses to the summary instead of a floating window.
 
@@ -102,10 +115,10 @@ Type `/model-usage` to open the pane. Press a timeframe button to change the win
 
 ## How it works
 
-- **Counting.** A `turn.step` hook sees every model request in the session, the main thread's and subagents', with the token counts and the model id that answered. It adds them to a per-model tally. While a request is in flight, the model is marked as responding.
+- **Counting.** A `turn.step` hook sees every model request in the session, the main thread's and subagents', with the token counts and the model id that answered. It adds them to this session's file (see above) and to the graph's history. While a request is in flight, the model is marked as responding.
 - **What the graph counts.** Input tokens + output tokens + cache-write tokens. Cache reads are left out on purpose: they are large and reflect how much context was re-read, not how much you worked.
 - **History.** Daily totals are kept for 200 days and hourly totals for 8 days, in the plugin's own store (`$.store`, a JSON file under your Claude Code config folder). Nothing leaves your machine, and no network call is made by the mod. The session tallies live in the host's session state and start over with each session.
-- **Cost share.** Each model's session tokens are priced with the `PRICES` table in `hooks/register.tsx` (USD per million tokens: input, output, cache read, cache write) and divided by the total across models. The table is a rough estimate, not a bill, so it can differ from the session cost Claude Code reports. Edit the table if prices change or a model is missing; unknown models fall back to a default rate.
+- **Cost share.** Each model's tokens in the limit window are priced with the `PRICES` table in `hooks/register.tsx` (USD per million tokens: input, output, cache read, cache write) and divided by the total across models. The table is a rough estimate, not a bill, so it can differ from the session cost Claude Code reports. Edit the table if prices change or a model is missing; unknown models fall back to a default rate.
 - **Usage limits.** Read from `$.session.usage()`, the same figures the status line has. The section says so when there is no reading yet, for example without a subscription or before the first response finishes.
 - **Drawing.** On the desktop app each card is one SVG (colors follow light and dark mode, and animation stops under reduced motion). On the terminal the same data is drawn with text elements. If the drawing code throws, the pane shows the error in red instead of staying blank.
 
@@ -128,7 +141,7 @@ claude plugin validate plugins/model-usage
 claude plugin test plugins/model-usage
 ```
 
-The tests check that `/model-usage` opens the pane and that the pane draws on both the desktop and terminal surfaces. The test kit has no `$.state` host, so the counting path itself (tallies, daily and hourly history) is not covered by a test; the pane is mounted against a small in-memory stand-in for state. Changes to a mod loaded through `CLAUDE_CODE_PLUGIN_DIRS` show up in the next session. Use `claude --plugin-dir` while iterating.
+The tests check that `/model-usage` opens the pane and that the pane draws on both the desktop and terminal surfaces. The test kit has no `$.state` host and no file access, so the counting path (tallies, daily and hourly history) and the all-sessions window (session files, bucket folding) are not covered by a test. The window logic was checked once with a throwaway script against hand-made session files; the pane is mounted against a small in-memory stand-in for state. Changes to a mod loaded through `CLAUDE_CODE_PLUGIN_DIRS` show up in the next session. Use `claude --plugin-dir` while iterating.
 
 ## Limits
 
