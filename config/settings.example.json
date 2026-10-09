@@ -1,0 +1,32 @@
+{
+  "env": {
+    "ENABLE_TOOL_SEARCH": "true",
+    "CLAUDE_CODE_PLUGIN_DIRS": "~/claude-helpers/plugins/model-usage"
+  },
+  "enabledPlugins": {
+    "caveman@caveman": true
+  },
+  "extraKnownMarketplaces": {
+    "caveman": { "source": { "source": "github", "repo": "JuliusBrussee/caveman" } }
+  },
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Read", "hooks": [{ "type": "command", "command": "\"$HOME/.claude/hooks/big-read-guard.sh\"", "timeout": 5 }] },
+      { "matcher": "Grep|Glob", "hooks": [{ "type": "command", "command": "\"$HOME/.claude/hooks/cbm-code-discovery-gate\"", "timeout": 5 }] },
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "rtk hook claude" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit|Write", "hooks": [{ "type": "command", "command": "\"$HOME/.claude/hooks/lint-after-edit.sh\"", "timeout": 15 }] },
+      { "matcher": "Read", "hooks": [{ "type": "command", "command": "\"$HOME/.claude/hooks/cbm-code-discovery-gate\"", "timeout": 5 }] }
+    ],
+    "SessionStart": [
+      { "matcher": "startup", "hooks": [{ "type": "command", "command": "\"$HOME/.claude/hooks/cbm-session-reminder\"", "timeout": 5 }] },
+      { "matcher": "resume", "hooks": [{ "type": "command", "command": "\"$HOME/.claude/hooks/cbm-session-reminder\"", "timeout": 5 }] },
+      { "matcher": "clear", "hooks": [{ "type": "command", "command": "\"$HOME/.claude/hooks/cbm-session-reminder\"", "timeout": 5 }] },
+      { "matcher": "compact", "hooks": [{ "type": "command", "command": "\"$HOME/.claude/hooks/cbm-session-reminder\"", "timeout": 5 }] }
+    ],
+    "SubagentStart": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "\"$HOME/.claude/hooks/cbm-subagent-reminder\"", "timeout": 5 }] }
+    ]
+  }
+}
