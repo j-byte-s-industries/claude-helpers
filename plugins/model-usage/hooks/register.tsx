@@ -1,19 +1,24 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Daily, Hourly, Range, Tally } from '../types'
+import type { Daily, Hourly, LimitWindow, Range, Tally } from '../types'
 
 const PANE = 'model-usage'
 const rows = atom({ plugin: 'model-usage', key: 'rows' } as const, {} as Record<string, Tally>)
 const daily = atom({ plugin: 'model-usage', key: 'daily' } as const, {} as Daily)
 const hourly = atom({ plugin: 'model-usage', key: 'hourly' } as const, {} as Hourly)
 const range = atom({ plugin: 'model-usage', key: 'range' } as const, '6m' as Range)
+const limitWindow = atom({ plugin: 'model-usage', key: 'limitWindow' } as const, '5h' as LimitWindow)
 const isPaneOpen = atom({ plugin: 'model-usage', key: 'isPaneOpen' } as const, false)
 const isBandHidden = atom({ plugin: 'model-usage', key: 'isBandHidden' } as const, false)
 const tick = atom({ plugin: 'model-usage', key: 'tick' } as const, 0)
 const active = atom({ plugin: 'model-usage', key: 'active' } as const, {} as Record<string, number>)
 
 const KEEP_DAYS = 200
+// The desktop app drops a pane whose tree is over 262,144 characters of JSON (and over 2,000
+// nodes), leaving it blank. Model cards (~37K each) are drawn while they fit in this budget,
+// which leaves room for the tiles, the limits and the JSON escaping; the rest are counted.
+const SVG_BUDGET = 180_000
 const MAX_WEEKS = 26
 const EMPTY = '#2d333b'
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -282,6 +287,15 @@ const RANGES: { id: Range; label: string }[] = [
 
 const hourKey = (d: Date) => `${key(d)}T${String(d.getHours()).padStart(2, '0')}`
 const addHours = (d: Date, n: number) => new Date(d.getTime() + n * 3_600_000)
+
+/** Fresh tokens a model used in the timeframe: hours for 24h and 7d, days beyond. */
+export const usageIn = (id: Range, now: Date, days: Record<string, number>, hours: Record<string, number>): number => {
+  const sum = (from: string, src: Record<string, number>) =>
+    Object.entries(src).reduce((n, [k, v]) => (k >= from ? n + v : n), 0)
+  if (id === '24h') return sum(hourKey(addHours(now, -23)), hours)
+  if (id === '7d') return sum(hourKey(addHours(now, -7 * 24 + 1)), hours)
+  return sum(key(addDays(now, id === '30d' ? -29 : -182)), days)
+}
 const hourText = (h: number) => (h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`)
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -391,19 +405,50 @@ const GRID_Y = 72
 const cardHeight = (g: Grid, size: number) => GRID_Y + g.rows * (size + 3) + 50
 
 // USD per million tokens: input, output, cache read, cache write. An estimate, not a bill.
-const PRICES: [RegExp, [number, number, number, number]][] = [
-  [/fable|mythos/, [10, 50, 0.25, 12.5]],
-  [/opus-5-5/, [4, 20, 0.2, 5]],
-  [/opus/, [5, 25, 0.5, 6.25]],
-  [/sonnet/, [2, 10, 0.2, 2.5]],
-  [/haiku/, [1, 5, 0.1, 1.25]],
+// Standard API rates from platform.claude.com/docs/en/about-claude/pricing (checked 2026-10-09).
+// Cache writes use the 1-hour rate (2x input), since Claude Code caches for an hour; usage
+// reports writes as one count, so 5-minute writes are overcounted. Fast mode (2x) is not
+// visible in usage, so it is not priced. First match wins: specific versions before families.
+type Price = [number, number, number, number]
+const PRICES: [RegExp, Price][] = [
+  [/(fable|mythos)-5-1/, [10, 50, 0.25, 20]],
+  [/fable|mythos/, [10, 50, 1, 20]],
+  [/opus-5-5/, [4, 20, 0.2, 8]],
+  [/opus-4-(1|\d{8})/, [15, 75, 1.5, 30]],
+  [/opus/, [5, 25, 0.5, 10]],
+  [/sonnet-5-5/, [2, 10, 0.1, 4]],
+  [/sonnet-5/, [2, 10, 0.2, 4]],
+  [/sonnet/, [3, 15, 0.3, 6]],
+  [/haiku-3-5/, [0.8, 4, 0.08, 1.6]],
+  [/haiku/, [1, 5, 0.1, 2]],
+  // A Claude model newer than this table: priced as the current Opus.
+  [/claude/, [4, 20, 0.2, 8]],
 ]
+// Haiku 5.5 is priced per request by prompt length (input + cache read + cache write).
+const HAIKU_5_5 = /haiku-5-5/
+const HAIKU_5_5_LONG = 100_000
+const HAIKU_5_5_PRICES: [Price, Price] = [[0.1, 0.5, 0.01, 0.2], [0.5, 2.5, 0.05, 1]]
+// Anything else (a local or third-party model behind a proxy) is not billed by Anthropic.
+const FALLBACK_PRICE: Price = [0, 0, 0, 0]
+
+export const priceOf = (model: string, prompt: number): Price => {
+  const id = model.toLowerCase()
+  if (HAIKU_5_5.test(id)) return HAIKU_5_5_PRICES[prompt > HAIKU_5_5_LONG ? 1 : 0]
+
+  return PRICES.find(([re]) => re.test(id))?.[1] ?? FALLBACK_PRICE
+}
+
+/** One request's estimated USD, or a sum of requests priced as if each were short. */
+export const usdOf = (model: string, input: number, output: number, cacheRead: number, cacheWrite: number): number => {
+  const [i, o, r, w] = priceOf(model, input + cacheRead + cacheWrite)
+
+  return (input * i + output * o + cacheRead * r + cacheWrite * w) / 1e6
+}
 
 const costOf = (model: string, t: Tally | undefined): number => {
   if (!t) return 0
-  const [i, o, r, w] = PRICES.find(([re]) => re.test(model.toLowerCase()))?.[1] ?? [4, 20, 0.2, 5]
 
-  return (t.input * i + t.output * o + t.cacheRead * r + t.cacheWrite * w) / 1e6
+  return t.usd ?? usdOf(model, t.input, t.output, t.cacheRead, t.cacheWrite)
 }
 
 const fmtUsd = (usd: number) => `$${usd < 10 ? usd.toFixed(2) : usd.toFixed(1)}`
@@ -548,38 +593,49 @@ ${rowsSvg}`,
 // concurrent sessions never overwrite each other.
 
 const FIVE_HOURS = 5 * 3_600_000
+const SEVEN_DAYS = 7 * 24 * 3_600_000
 const BUCKET = 300_000
-const KEEP_BUCKETS_MS = 24 * 3_600_000
+// A day past the weekly window, so a week of buckets survives clock drift on the reset time.
+const KEEP_BUCKETS_MS = SEVEN_DAYS + 24 * 3_600_000
 
-// requests, input, output, cache read, cache write, subagent requests
-type Cell = [number, number, number, number, number, number]
+// Which usage limit the cost split measures against: its rate-limit kind, span and labels.
+const WINDOWS: Record<LimitWindow, { kind: string; span: number; button: string; inLimit: string; rolling: string; short: string }> = {
+  '5h': { kind: 'five_hour', span: FIVE_HOURS, button: '5 hours', inLimit: '5h limit window', rolling: 'last 5h', short: '5h' },
+  '7d': { kind: 'seven_day', span: SEVEN_DAYS, button: 'Weekly', inLimit: 'weekly limit window', rolling: 'last 7d', short: 'wk' },
+}
+
+// requests, input, output, cache read, cache write, subagent requests, estimated USD
+// (priced per request; files written before the USD slot have six entries)
+type Cell = [number, number, number, number, number, number, number?]
 type Buckets = Record<string, Record<string, Cell>>
 type SessionFile = { sessionId: string; updatedAt: number; buckets: Buckets }
 
 const place = { dir: '', id: '' }
 let mine: Buckets = {}
 
-const emptyTally = (): Tally => ({ requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subagentRequests: 0 })
+const emptyTally = (): Tally => ({ requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, subagentRequests: 0, usd: 0 })
 
-const addCell = (t: Tally, c: Cell): void => {
+const addCell = (model: string, t: Tally, c: Cell): void => {
   t.requests += c[0]
   t.input += c[1]
   t.output += c[2]
   t.cacheRead += c[3]
   t.cacheWrite += c[4]
   t.subagentRequests += c[5]
+  t.usd = (t.usd ?? 0) + (c[6] ?? usdOf(model, c[1], c[2], c[3], c[4]))
 }
 
 const recordBucket = (model: string, u: Usage, isSub: boolean, at: number): void => {
   const b = String(Math.floor(at / BUCKET) * BUCKET)
   const m = (mine[model] ??= {})
-  const c = (m[b] ??= [0, 0, 0, 0, 0, 0])
+  const c = (m[b] ??= [0, 0, 0, 0, 0, 0, 0])
   c[0] += 1
   c[1] += u.input_tokens
   c[2] += u.output_tokens
   c[3] += u.cache_read_input_tokens
   c[4] += u.cache_creation_input_tokens
   c[5] += isSub ? 1 : 0
+  c[6] = (c[6] ?? 0) + usdOf(model, u.input_tokens, u.output_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens)
   for (const model2 of Object.keys(mine))
     for (const k of Object.keys(mine[model2])) if (at - Number(k) > KEEP_BUCKETS_MS) delete mine[model2][k]
 }
@@ -601,7 +657,7 @@ const foldFiles = (files: SessionFile[], startMs: number): { perModel: Record<st
     for (const [model, byBucket] of Object.entries(f.buckets ?? {}))
       for (const [b, cell] of Object.entries(byBucket)) {
         if (Number(b) < from) continue
-        addCell((perModel[model] ??= emptyTally()), cell)
+        addCell(model, (perModel[model] ??= emptyTally()), cell)
         isActive = true
       }
     if (isActive) sessions += 1
@@ -612,19 +668,20 @@ const foldFiles = (files: SessionFile[], startMs: number): { perModel: Record<st
 export type WindowUsage = {
   perModel: Record<string, Tally>
   sessions: number
-  /** what the numbers cover: the limit's own window, or a rolling five hours */
+  /** what the numbers cover: the limit's own window, or a rolling span of the same length */
   label: string
 }
 
-let cached: { at: number; value: WindowUsage } | null = null
+let cached: { at: number; which: LimitWindow; value: WindowUsage } | null = null
 
-const loadWindow = async ($: EngineInterface, limits: Limit[], nowMs: number): Promise<WindowUsage> => {
-  if (cached && nowMs - cached.at < 4000) return cached.value
-  const five = limits.find(l => l.kind === 'five_hour')
-  const reset = five?.resetsAt ? Date.parse(five.resetsAt) : Number.NaN
-  const isLimitWindow = !Number.isNaN(reset) && reset > nowMs && reset - nowMs <= FIVE_HOURS + 60_000
-  const startMs = isLimitWindow ? reset - FIVE_HOURS : nowMs - FIVE_HOURS
-  const label = isLimitWindow ? '5h limit window' : 'last 5h'
+const loadWindow = async ($: EngineInterface, limits: Limit[], nowMs: number, which: LimitWindow): Promise<WindowUsage> => {
+  if (cached && cached.which === which && nowMs - cached.at < 4000) return cached.value
+  const w = WINDOWS[which]
+  const limit = limits.find(l => l.kind === w.kind)
+  const reset = limit?.resetsAt ? Date.parse(limit.resetsAt) : Number.NaN
+  const isLimitWindow = !Number.isNaN(reset) && reset > nowMs && reset - nowMs <= w.span + 60_000
+  const startMs = isLimitWindow ? reset - w.span : nowMs - w.span
+  const label = isLimitWindow ? w.inLimit : w.rolling
 
   const files: SessionFile[] = [{ sessionId: place.id, updatedAt: nowMs, buckets: mine }]
   if (place.dir) {
@@ -642,9 +699,9 @@ const loadWindow = async ($: EngineInterface, limits: Limit[], nowMs: number): P
       // No shared folder yet or no file access: this session's numbers only.
     }
   }
-  const { perModel, sessions } = foldFiles(files, startMs)
+  const { perModel, sessions } = foldFiles(withHistory(files), startMs)
   const value = { perModel, sessions, label }
-  cached = { at: nowMs, value }
+  cached = { at: nowMs, which, value }
 
   return value
 }
@@ -661,7 +718,129 @@ const writeMine = async ($: EngineInterface, at: number): Promise<void> => {
 
 let chain: Promise<unknown> = Promise.resolve()
 
-const BUILD = '2026-10-09-d'
+// ---------------------------------------------------------------------------
+// Transcript backfill: Claude Code writes every response's usage to a transcript
+// under ~/.claude/projects, so sessions this mod never saw (before it was loaded,
+// or whose bucket file is gone) are read from there by hooks/backfill.py. The
+// script is incremental: after the first run it parses only new lines.
+
+type History = { updatedAt: number; sessions: Record<string, Buckets>; daily: Daily; hourly: Hourly }
+
+let history: History | null = null
+let backfillAt = 0
+let backfilling: Promise<void> | null = null
+// What the last run did, for the pane's footer: when it read the transcripts, or why it failed.
+let backfillStatus = 'transcripts not read yet'
+const BACKFILL_EVERY_MS = 60_000
+
+// The price table, handed to the script so it lives in one place.
+const pricesJson = (): string =>
+  JSON.stringify({
+    table: PRICES.map(([re, price]) => [re.source, price]),
+    haiku55: { re: HAIKU_5_5.source, long: HAIKU_5_5_LONG, prices: HAIKU_5_5_PRICES },
+    fallback: FALLBACK_PRICE,
+  })
+
+// Per session, model and bucket, whichever of the live file and the transcripts
+// counted more requests: both count the same requests, so they are never added.
+// On a tie the transcripts win, since they price the real cache-write split.
+const withHistory = (files: SessionFile[]): SessionFile[] => {
+  if (!history) return files
+  const out = files.map(f => ({
+    ...f,
+    buckets: Object.fromEntries(Object.entries(f.buckets ?? {}).map(([m, b]) => [m, { ...b }])),
+  }))
+  const bySession = new Map(out.map(f => [f.sessionId, f]))
+  for (const [sid, models] of Object.entries(history.sessions)) {
+    let f = bySession.get(sid)
+    if (!f) {
+      f = { sessionId: sid, updatedAt: history.updatedAt, buckets: {} }
+      out.push(f)
+      bySession.set(sid, f)
+    }
+    for (const [model, cells] of Object.entries(models))
+      for (const [b, cell] of Object.entries(cells)) {
+        const into = (f.buckets[model] ??= {})
+        const live = into[b]
+        if (!live || live[0] <= cell[0]) into[b] = cell
+      }
+  }
+
+  return out
+}
+
+// The graphs keep the larger of the live count and the transcripts' for each day
+// and hour: the live count outlives a deleted transcript, the transcripts cover
+// sessions the mod never saw.
+const maxMerge = (live: Record<string, Record<string, number>>, from: Record<string, Record<string, number>>, cutoff: string) => {
+  const out: Record<string, Record<string, number>> = {}
+  for (const model of new Set([...Object.keys(live), ...Object.keys(from)])) {
+    const merged: Record<string, number> = { ...(live[model] ?? {}) }
+    for (const [k, v] of Object.entries(from[model] ?? {})) merged[k] = Math.max(merged[k] ?? 0, v)
+    for (const k of Object.keys(merged)) if (k < cutoff) delete merged[k]
+    if (Object.keys(merged).length > 0) out[model] = merged
+  }
+
+  return out
+}
+
+const mergeGraphs = ($: EngineInterface, h: History): Promise<unknown> => {
+  chain = chain.then(async () => {
+    const now = new Date()
+    const days = maxMerge(((await $.store.get('daily')) as Daily | undefined) ?? {}, h.daily, key(addDays(now, -KEEP_DAYS)))
+    await $.store.set('daily', days)
+    await update($, daily, () => days)
+    const hrs = maxMerge(((await $.store.get('hourly')) as Hourly | undefined) ?? {}, h.hourly, hourKey(addDays(now, -8)))
+    await $.store.set('hourly', hrs)
+    await update($, hourly, () => hrs)
+  })
+
+  return chain
+}
+
+// Runs the script at most once a minute, one run at a time; never throws.
+const backfill = ($: EngineInterface): Promise<void> => {
+  if (backfilling) return backfilling
+  if (Date.now() - backfillAt < BACKFILL_EVERY_MS) return Promise.resolve()
+  backfillAt = Date.now()
+  backfilling = (async () => {
+    try {
+      // A hot reload starts the module afresh without a session.start: find the folder here.
+      if (!place.dir) place.dir = `${(await $.env.get('HOME')) ?? ''}/.claude/model-usage`
+      if (!place.id) place.id = await $.session.id()
+      // The plugin root is the folder holding plugin.json, which may be .claude-plugin.
+      const root = $.plugin.root.replace(/[\\/]\.claude-plugin$/, '')
+      const out = `${place.dir}/history.json`
+      const r = await $.process.run(
+        [
+          'python3', '-I', `${root}/hooks/backfill.py`,
+          `${place.dir.replace(/\/model-usage$/, '')}/projects`,
+          `${place.dir}/backfill-state.json`, out, pricesJson(), String(Date.now()),
+        ],
+        { timeoutMs: 120_000 },
+      )
+      if (r.exitCode !== 0) {
+        backfillStatus = `transcript backfill failed: ${r.stderr.trim().split('\n').pop() ?? `exit ${r.exitCode}`}`
+        $.ui.log(`model-usage: ${backfillStatus}`, { to: 'debug' })
+        return
+      }
+      history = JSON.parse(await $.fs.read(out)) as History
+      backfillStatus = `transcripts read ${new Date(history.updatedAt).toLocaleTimeString()}, ${Object.keys(history.sessions).length} sessions`
+      await mergeGraphs($, history)
+      cached = null
+      await update($, tick, n => n + 1)
+    } catch (err) {
+      backfillStatus = `transcript backfill failed: ${String(err)}`
+      $.ui.log(`model-usage: ${backfillStatus}`, { to: 'debug' })
+    } finally {
+      backfilling = null
+    }
+  })()
+
+  return backfilling
+}
+
+const BUILD = '2026-10-09-g'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const draw = async ($: EngineInterface, e: any) => {
@@ -671,6 +850,7 @@ const draw = async ($: EngineInterface, e: any) => {
     const hours = await read($, hourly)
     const busy = await read($, active)
     const picked = await read($, range)
+    const pickedWindow = await read($, limitWindow)
     await read($, tick)
     let limits: Limit[] = []
     let cost: number | undefined
@@ -682,16 +862,20 @@ const draw = async ($: EngineInterface, e: any) => {
       // No usage reading: the section says so.
     }
     const nowMs = Date.now()
-    const win = await loadWindow($, limits, nowMs)
+    const win = await loadWindow($, limits, nowMs, pickedWindow)
     const session = win.perModel
     const models = Array.from(new Set([...Object.keys(session), ...Object.keys(history)]))
-    const weight = (m: string) => Object.values(history[m] ?? {}).reduce((n, v) => n + v, 0)
-    models.sort((a, b) => weight(b) - weight(a))
     const costs = Object.fromEntries(models.map(m => [m, costOf(m, session[m])]))
+    const usedIn = Object.fromEntries(
+      models.map(m => [m, usageIn(picked, new Date(nowMs), history[m] ?? {}, hours[m] ?? {})]),
+    )
+    models.sort((a, b) => (usedIn[b] ?? 0) - (usedIn[a] ?? 0) || (costs[b] ?? 0) - (costs[a] ?? 0) || (a < b ? -1 : a > b ? 1 : 0))
     const costSum = Object.values(costs).reduce((n, v) => n + v, 0)
     const shareOf = (m: string) => (costSum > 0 ? costs[m] / costSum : 0)
 
     if (models.length === 0) return <Text dimColor>No model requests yet.</Text>
+    // Cards only for models used in the timeframe or the limit window (see SVG_BUDGET).
+    const shown = models.filter(m => (usedIn[m] ?? 0) > 0 || (costs[m] ?? 0) > 0)
 
     const cols = e.props?.bodyColumns ?? e.viewport?.columns ?? 80
     const now = new Date()
@@ -702,17 +886,30 @@ const draw = async ($: EngineInterface, e: any) => {
     const reqs = Object.values(session).reduce((n, t) => n + t.requests, 0)
 
     const picker = (
-      <Box flexDirection="row" alignItems="center" gap={2} marginTop={1} marginBottom={1}>
-        <Text dimColor>Timeframe</Text>
-        {RANGES.map(r => (
-          <Button
-            key={`range-${r.id}`}
-            label={r.label}
-            variant={r.id === picked ? 'primary' : 'secondary'}
-            onPress={() => update($, range, () => r.id)}
-          />
-        ))}
-        <Button key="undock" label="Undock" plain onPress={() => void $.ui.close({ id: PANE })} />
+      <Box flexDirection="column" gap={1} marginTop={1} marginBottom={1}>
+        <Box flexDirection="row" alignItems="center" gap={2}>
+          <Text dimColor>Timeframe</Text>
+          {RANGES.map(r => (
+            <Button
+              key={`range-${r.id}`}
+              label={r.label}
+              variant={r.id === picked ? 'primary' : 'secondary'}
+              onPress={() => update($, range, () => r.id)}
+            />
+          ))}
+          <Button key="undock" label="Undock" plain onPress={() => void $.ui.close({ id: PANE })} />
+        </Box>
+        <Box flexDirection="row" alignItems="center" gap={2}>
+          <Text dimColor>Limit window</Text>
+          {(Object.keys(WINDOWS) as LimitWindow[]).map(id => (
+            <Button
+              key={`window-${id}`}
+              label={WINDOWS[id].button}
+              variant={id === pickedWindow ? 'primary' : 'secondary'}
+              onPress={() => update($, limitWindow, () => id)}
+            />
+          ))}
+        </Box>
       </Box>
     )
 
@@ -720,6 +917,17 @@ const draw = async ($: EngineInterface, e: any) => {
       const { Svg } = ui
       const W = Math.max(280, Math.min(680, cols * 8 - 8))
       const maxWeeks = Math.max(8, Math.min(28, Math.floor((W - LABEL_W) / STEP)))
+      const cards: { model: string; source: string; alt: string; height: number }[] = []
+      let budget = SVG_BUDGET
+      for (const m of shown) {
+        const grid = buildGrid(picked, now, maxWeeks, history[m] ?? {}, hours[m] ?? {})
+        const size = cellSize(W, grid)
+        const source = cardSvg(W, { model: m, days: history[m] ?? {}, tally: session[m], isBusy: isBusy(m), cost: costs[m], share: shareOf(m), scope: win.label, sessions: win.sessions, grid, size, today })
+        if (source.length > budget) break
+        budget -= source.length
+        cards.push({ model: m, source, alt: `${modelName(m)}: ${fmt(gridStats(grid).sum)} tokens in ${grid.window}`, height: cardHeight(grid, size) })
+      }
+      const hidden = models.length - cards.length
 
       return (
         <Box flexDirection="column">
@@ -730,21 +938,11 @@ const draw = async ($: EngineInterface, e: any) => {
             height={40}
           />
           {picker}
-          {models.map(m => {
-            const grid = buildGrid(picked, now, maxWeeks, history[m] ?? {}, hours[m] ?? {})
-            const size = cellSize(W, grid)
-
-            return (
-              <Svg
-                key={m}
-                source={cardSvg(W, { model: m, days: history[m] ?? {}, tally: session[m], isBusy: isBusy(m), cost: costs[m], share: shareOf(m), scope: win.label, sessions: win.sessions, grid, size, today })}
-                alt={`${modelName(m)}: ${fmt(gridStats(grid).sum)} tokens in ${grid.window}`}
-                width={W}
-                height={cardHeight(grid, size)}
-              />
-            )
-          })}
-          <Text dimColor>model-usage build {BUILD}</Text>
+          {cards.map(c => (
+            <Svg key={c.model} source={c.source} alt={c.alt} width={W} height={c.height} />
+          ))}
+          {hidden > 0 && <Text dimColor>{hidden} more model{hidden === 1 ? '' : 's'} with less or no use in this timeframe</Text>}
+          <Text dimColor>model-usage build {BUILD} · {backfillStatus}</Text>
           <Svg
             source={limitsSvg(W, limits, cost, nowMs)}
             alt={limits.map(l => `${limitName(l.kind)} ${l.percentUsed}% used`).join(', ') || 'No usage limits reading'}
@@ -825,7 +1023,7 @@ const draw = async ($: EngineInterface, e: any) => {
             </Box>
           )
         })}
-        <Text dimColor>Graph counts input + output + cache-write tokens. (build {BUILD})</Text>
+        <Text dimColor>Graph counts input + output + cache-write tokens. (build {BUILD} · {backfillStatus})</Text>
         <Box flexDirection="column" marginTop={1}>
           <Text bold>Usage limits{cost !== undefined ? ` · session ≈ $${cost.toFixed(2)}` : ''}</Text>
           {limits.length === 0 && <Text dimColor>No rate-limit reading yet.</Text>}
@@ -852,12 +1050,14 @@ export const register: Register = on => {
       description: 'Show token usage per model as an activity graph',
     })
     $.clock.every(30_000, () => void update($, tick, n => n + 1))
+    // Never from a render hook: drawing may not write, and a backfill writes the graphs.
+    $.clock.every(BACKFILL_EVERY_MS, () => void backfill($))
     try {
       place.id = await $.session.id()
       place.dir = `${(await $.env.get('HOME')) ?? ''}/.claude/model-usage`
       await $.fs.write(`${place.dir}/.keep`, '')
-      // Session files nobody has touched for two days are of no use to any window.
-      await $.process.run(['find', place.dir, '-name', 'usage-*.json', '-mtime', '+2', '-delete'], { timeoutMs: 5000 })
+      // Session files nobody has touched for eight days are of no use to any window.
+      await $.process.run(['find', place.dir, '-name', 'usage-*.json', '-mtime', '+8', '-delete'], { timeoutMs: 5000 })
       const own = JSON.parse(await $.fs.read(`${place.dir}/usage-${place.id}.json`)) as SessionFile
       mine = own.buckets ?? {}
     } catch {
@@ -869,6 +1069,7 @@ export const register: Register = on => {
     if (saved) await update($, daily, () => saved)
     const savedHours = (await $.store.get('hourly')) as Hourly | undefined
     if (savedHours) await update($, hourly, () => savedHours)
+    void backfill($)
 
     return next(e)
   })
@@ -925,6 +1126,8 @@ export const register: Register = on => {
 
       const nowAt = Date.now()
       recordBucket(model, u, Boolean(e.agentId), nowAt)
+      // A hot reload skips session.start and its timer: a request starts the backfill too.
+      void backfill($)
       cached = null
       await writeMine($, nowAt)
 
@@ -988,7 +1191,8 @@ export const register: Register = on => {
     } catch {
       // No reading: the window falls back to the last five hours.
     }
-    const session = (await loadWindow($, limits, Date.now())).perModel
+    const which = await read($, limitWindow)
+    const session = (await loadWindow($, limits, Date.now(), which)).perModel
     const models = Array.from(new Set([...Object.keys(session), ...Object.keys(history)]))
     if (models.length === 0) return next(e)
 
@@ -1000,8 +1204,8 @@ export const register: Register = on => {
     const todayKey = key(new Date())
     const todayTotal = models.reduce((n, m) => n + (history[m]?.[todayKey] ?? 0), 0)
 
-    const five = limits.find(l => l.kind === 'five_hour')
-    const limit = five ? ` · 5h ${five.percentUsed}%` : ''
+    const shown = limits.find(l => l.kind === WINDOWS[which].kind)
+    const limit = shown ? ` · ${WINDOWS[which].short} ${shown.percentUsed}%` : ''
 
     const width = 16
     const bar = ranked.map(m => {

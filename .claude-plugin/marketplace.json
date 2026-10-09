@@ -11,8 +11,8 @@
     {
       "name": "model-usage",
       "source": "./plugins/model-usage",
-      "description": "Mod: token usage per model as an activity graph, pixel crab per model, cost share dials and account usage limits.",
-      "version": "0.3.0",
+      "description": "Mod: token usage per model as an activity graph, pixel crab per model, cost share dials against the 5-hour or weekly limit, and account usage limits.",
+      "version": "0.4.0",
       "category": "mod"
     }
   ]
