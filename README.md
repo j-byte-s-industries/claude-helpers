@@ -10,7 +10,7 @@ The stack in one sentence: **spend fewer tokens** (RTK, codebase-memory, caveman
 
 | Path | What it is |
 | --- | --- |
-| [`skills/`](skills) | Skills: `tiered-delegation`, `delegate-to-haiku`, `ship`, `codebase-memory`. |
+| [`skills/`](skills) | Skills: `tiered-delegation`, `delegate-to-haiku`, `ship`, `wave`, `release`, `codebase-memory`. |
 | [`agents/`](agents) | Subagents: `haiku-coder`, `haiku-scout`, `haiku-tickets`, `sonnet-builder-low`, `sonnet-builder-medium`, `codebase-memory`, `codebase-memory-scout`, `codebase-memory-auditor`. |
 | [`hooks/`](hooks) | Hook scripts: `big-read-guard.sh`, `lint-after-edit.sh`, and three `cbm-*` graph-context hooks. |
 | [`config/`](config) | `CLAUDE.example.md` (global instructions), `RTK.md`, `settings.example.json` (hooks, plugins, env). |
