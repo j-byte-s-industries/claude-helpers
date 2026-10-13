@@ -1,7 +1,7 @@
 ---
 name: haiku-scout
 description: >-
-  Cheap, fast worker on Haiku 4.5 for BATCHED, well-specified, read-only work:
+  Cheap, fast worker on Haiku (latest) for BATCHED, well-specified, read-only work:
   multi-file greps, cross-tree existence/shape checks, bulk "which of these files
   do X" lookups, reading a set of files and reporting one field. Give it an
   explicit spec and an exact output format; it returns the conclusion, not raw
